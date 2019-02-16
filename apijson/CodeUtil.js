@@ -36,6 +36,7 @@ var CodeUtil = {
 
     var depth = 0;
     var names = [];
+    var isInSubquery = false;
 
     var index;
     var key;
@@ -55,15 +56,19 @@ var CodeUtil = {
       line = line.trim();
 
       if (line.endsWith('{')) { //对象，判断是不是Table，再加对应的注释
+        isInSubquery = key.endsWith('@');
+
         depth ++;
         names[depth] = key;
-        comment = CodeUtil.getComment4Request(tableList, null, key, null, method);
+
+        comment = CodeUtil.getComment4Request(tableList, names[depth - 1], key, null, method, false);
       }
       else {
         if (line.endsWith('}')) {
+          isInSubquery = false;
+
           if (line.endsWith('{}')) { //对象，判断是不是Table，再加对应的注释
-            names[depth] = key;
-            comment = CodeUtil.getComment4Request(tableList, null, key, null, method);
+            comment = CodeUtil.getComment4Request(tableList, names[depth], key, null, method, false);
           }
           else {
             depth --;
@@ -77,7 +82,7 @@ var CodeUtil = {
           var isArray = line.endsWith('['); // []  不影响
           // alert('depth = ' + depth + '; line = ' + line + '; isArray = ' + isArray);
           comment = value == 'null' ? ' ! null无效' : CodeUtil.getComment4Request(tableList, names[depth], key
-            , isArray ? '' : line.substring(index + 2).trim(), method);
+            , isArray ? '' : line.substring(index + 2).trim(), method, isInSubquery);
         }
       }
 
@@ -160,7 +165,7 @@ var CodeUtil = {
       depth = 0;
     }
 
-    const parentKey = JSONObject.isArrayKey(name) ? JSONResponse.getSimpleName(CodeUtil.getItemKey(name)) : CodeUtil.getTableKey(JSONResponse.getSimpleName(name));
+    const parentKey = JSONObject.isArrayKey(name) ? JSONResponse.getVariableName(CodeUtil.getItemKey(name)) : CodeUtil.getTableKey(JSONResponse.getVariableName(name));
 
 
     return CodeUtil.parseCode(name, reqObj, {
@@ -195,7 +200,7 @@ var CodeUtil = {
 
         log(CodeUtil.TAG, 'parseJava  for delete >> count = ' + count + '; page = ' + page);
 
-        var name = JSONResponse.getSimpleName(CodeUtil.getItemKey(key));
+        var name = JSONResponse.getVariableName(CodeUtil.getItemKey(key));
 
         if (isSmart) {
           var prefix = key.substring(0, key.length - 2);
@@ -225,33 +230,36 @@ var CodeUtil = {
         const isTable = isSmart && JSONObject.isTableKey(JSONResponse.getTableName(key));
 
         const column = isTable ? value['@column'] : null;
-        const order = isTable ? value['@order'] : null;
         const group = isTable ? value['@group'] : null;
         const having = isTable ? value['@having'] : null;
+        const order = isTable ? value['@order'] : null;
         const combine = isTable ? value['@combine'] : null;
         const schema = isTable ? value['@schema'] : null;
+        const database = isTable ? value['@database'] : null;
         const role = isTable ? value['@role'] : null;
 
         if (isTable) {
           delete value['@column'];
-          delete value['@order'];
           delete value['@group'];
           delete value['@having'];
+          delete value['@order'];
           delete value['@combine'];
           delete value['@schema'];
+          delete value['@database'];
           delete value['@role'];
         }
 
         s += CodeUtil.parseJava(key, value, depth + 1, isTable);
 
-        const name = CodeUtil.getTableKey(JSONResponse.getSimpleName(key));
+        const name = CodeUtil.getTableKey(JSONResponse.getVariableName(key));
         if (isTable) {
           s = column == null ? s : s + '\n' + name + '.setColumn(' + CodeUtil.getJavaValue(name, key, column) + ');';
-          s = order == null ? s : s + '\n' + name + '.setOrder(' + CodeUtil.getJavaValue(name, key, order) + ');';
           s = group == null ? s : s + '\n' + name + '.setGroup(' + CodeUtil.getJavaValue(name, key, group) + ');';
           s = having == null ? s : s + '\n' + name + '.setHaving(' + CodeUtil.getJavaValue(name, key, having) + ');';
+          s = order == null ? s : s + '\n' + name + '.setOrder(' + CodeUtil.getJavaValue(name, key, order) + ');';
           s = combine == null ? s : s + '\n' + name + '.setCombine(' + CodeUtil.getJavaValue(name, key, combine) + ');';
           s = schema == null ? s : s + '\n' + name + '.setSchema(' + CodeUtil.getJavaValue(name, key, schema) + ');';
+          s = database == null ? s : s + '\n' + name + '.setDatabase(' + CodeUtil.getJavaValue(name, key, database) + ');';
           s = role == null ? s : s + '\n' + name + '.setRole(' + CodeUtil.getJavaValue(name, key, role) + ');';
         }
 
@@ -269,6 +277,18 @@ var CodeUtil = {
           }
           if (key == 'version') {
             return '\n' + parentKey + '.setVersion(' + CodeUtil.getJavaValue(name, key, value) + ');';
+          }
+          if (key == 'format') {
+            return '\n' + parentKey + '.setFormat(' + CodeUtil.getJavaValue(name, key, value) + ');';
+          }
+          if (key == '@schema') {
+            return '\n' + parentKey + '.setSchema(' + CodeUtil.getJavaValue(name, key, value) + ');';
+          }
+          if (key == '@database') {
+            return '\n' + parentKey + '.setDatabase(' + CodeUtil.getJavaValue(name, key, value) + ');';
+          }
+          if (key == '@role') {
+            return '\n' + parentKey + '.setRole(' + CodeUtil.getJavaValue(name, key, value) + ');';
           }
         }
         return '\n' + parentKey + '.put("' + key + '", ' + CodeUtil.getJavaValue(name, key, value) + ');';
@@ -327,14 +347,14 @@ var CodeUtil = {
 
         var type = CodeUtil.getJavaTypeFromJS(key, value, true);
 
-        return '\n' + CodeUtil.getBlank(depth) + type + ' ' + key + ' = ' + name + '.get'
+        return '\n' + CodeUtil.getBlank(depth) + type + ' ' + JSONResponse.getVariableName(key) + ' = ' + name + '.get'
           + (/[A-Z]/.test(type.substring(0, 1)) ? type : StringUtil.firstCase(type + 'Value', true)) + '("' + key + '");';
       },
 
       onParseJSONArray: function (key, value, index) {
         var padding = '\n' + CodeUtil.getBlank(depth);
         var innerPadding = padding + CodeUtil.getBlank(1);
-        var k = JSONResponse.replaceArray(key);
+        var k = JSONResponse.getVariableName(key);
         //还有其它字段冲突以及for循环的i冲突，解决不完的，只能让开发者自己抽出函数  var item = StringUtil.addSuffix(k, 'Item');
         var type = CodeUtil.getJavaTypeFromJS('item', value[0], false);
 
@@ -367,7 +387,7 @@ var CodeUtil = {
 
       onParseJSONObject: function (key, value, index) {
         var padding = '\n' + CodeUtil.getBlank(depth);
-        var k = StringUtil.firstCase(JSONResponse.getSimpleName(key));
+        var k = JSONResponse.getVariableName(key);
 
         var s = '\n' + padding + '//' + key + '<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<';
 
@@ -816,6 +836,7 @@ var CodeUtil = {
 
 
   QUERY_TYPES: ['数据', '数量', '全部'],
+  SUBQUERY_RANGES: ['ANY', 'ALL'],
   QUERY_TYPE_KEYS: [0, 1, 2],
   QUERY_TYPE_CONSTS: ["JSONRequest.QUERY_TABLE", "JSONRequest.QUERY_TOTAL", "JSONRequest.QUERY_ALL"],
   REQUEST_ROLE_KEYS: ['UNKNOWN', 'LOGIN', 'CONTACT', 'CIRCLE', 'OWNER', 'ADMIN'],
@@ -827,21 +848,39 @@ var CodeUtil = {
     OWNER: '拥有者',
     ADMIN: '管理员'
   },
+  REQUEST_DATABASE_KEYS: ['MYSQL', 'POSTGRESQL', 'ORACLE'],
 
   /**获取请求JSON的注释
    * @param tableList
    * @param name
    * @param key
    * @param value
+   * @param isInSubquery
    */
-  getComment4Request: function (tableList, name, key, value, method) {
+  getComment4Request: function (tableList, name, key, value, method, isInSubquery) {
     // alert('name = ' + name + '; key = ' + key + '; value = ' + value + '; method = ' + method);
 
     if (key == null) {
       return '';
     }
+    // if (value == null) {
+    //   return ' ! key:value 中 key 或 value 任何一个为 null 时，该 key:value 都无效！'
+    // }
 
     if (value == null || value instanceof Object) {
+
+      if (key.endsWith('@')) {
+        if (key == '@from@') {
+          return CodeUtil.getComment('数据来源：匿名子查询，例如 {"from":"Table", "Table":{}}', false, '  ');
+        }
+
+        var aliaIndex = name == null ? -1 : name.indexOf(':');
+        var objName = aliaIndex < 0 ? name : name.substring(0, aliaIndex);
+        if (JSONObject.isTableKey(objName)) {
+          return CodeUtil.getComment('子查询 < ' + CodeUtil.getCommentFromDoc(tableList, objName, key.substring(0, key.length - 1), method), false, '  ');
+        }
+        return CodeUtil.getComment('子查询 ' + StringUtil.get(name) + "，需要被下面的表字段相关 key 引用赋值", false, '  ');
+      }
 
       if (JSONObject.isArrayKey(key)) {
         if (method != 'GET') {
@@ -872,20 +911,33 @@ var CodeUtil = {
       return '';
     }
 
-    if (JSONObject.isArrayKey(name)) {
+    if (isInSubquery || JSONObject.isArrayKey(name)) {
       switch (key) {
         case 'count':
-          return CodeUtil.getType4Request(value) != 'number' ? ' ! value必须是Number类型！' : CodeUtil.getComment('最多数量', false, '  ');
+          return CodeUtil.getType4Request(value) != 'number' ? ' ! value必须是Number类型！' : CodeUtil.getComment('最多数量: 例如 5 10 20 ...', false, '  ');
         case 'page':
           if (CodeUtil.getType4Request(value) != 'number') {
             return ' ! value必须是Number类型！';
           }
-          return value < 0 ? ' ! 必须 >= 0 ！' : CodeUtil.getComment('分页页码', false, '  ');
+          return value < 0 ? ' ! 必须 >= 0 ！' : CodeUtil.getComment('分页页码: 例如 0 1 2 ...', false, '  ');
         case 'query':
           var query = CodeUtil.QUERY_TYPES[value];
           return StringUtil.isEmpty(query) ? ' ! value必须是[' + CodeUtil.QUERY_TYPE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('查询内容：0-数据 1-总数 2-全部', false, '  ');
         case 'join':
-          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('多表连接：LEFT JOIN < ，RIGHT JOIN > ，INNER JOIN & | ! ', false, '  ');
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('多表连接：例如 &/User/id@,</Comment/momentId@,...', false, '  ');
+        default:
+          if (isInSubquery) {
+            switch (key) {
+              case 'range':
+                if (CodeUtil.getType4Request(value) != 'string') {
+                  return ' ! value必须是String类型！';
+                }
+                return CodeUtil.SUBQUERY_RANGES.indexOf(value.substring(1, value.length - 1)) < 0 ? ' ! value必须是[' + CodeUtil.SUBQUERY_RANGES.join() + ']中的一种！' : CodeUtil.getComment('比较范围：ANY-任意 ALL-全部', false, '  ');
+              case 'from':
+                return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('数据来源：例如 User，同一层级必须有对应的 "User": {...}', false, '  ');
+            }
+          }
+          break;
       }
       return '';
     }
@@ -894,29 +946,34 @@ var CodeUtil = {
     var objName = aliaIndex < 0 ? name : name.substring(0, aliaIndex);
 
     if (JSONObject.isTableKey(objName)) {
+      switch (key) {
+        case '@column':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('返回字段：例如 id,name;json_length(contactIdList):contactCount;...', false, '  ');
+        case '@from@': //value 类型为 Object 时 到不了这里，已在上方处理
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String或Object类型！' : CodeUtil.getComment('数据来源：引用赋值 子查询 "' + value.substring(1, value.length - 1) + '@":{...} ', false, '  ');
+        case '@group':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('分组方式：例如 userId,momentId,...', false, '  ');
+        case '@having':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('SQL函数：例如 max(id)>100;sum(balance)<=10000;...', false, '  ');
+        case '@order':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('排序方式：+升序，-降序，例如 name+,date-,...', false, '  ');
+        case '@combine':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('条件组合：例如 name?,|tag?,&id{},!id,...', false, '  ');
+        case '@schema':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('集合空间：例如 sys apijson ...', false, '  ');
+        case '@database':
+          try {
+            value = value.substring(1, value.length - 1);
+          } catch (e) {}
+          return CodeUtil.REQUEST_DATABASE_KEYS.indexOf(value) < 0 ? ' ! value必须是[' + CodeUtil.REQUEST_DATABASE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('数据库：例如 MYSQL POSTGRESQL ORACLE ...', false, '  ');
+        case '@role':
+          try {
+            value = value.substring(1, value.length - 1);
+          } catch (e) {}
+          var role = CodeUtil.REQUEST_ROLE[value];
+          return StringUtil.isEmpty(role) ? ' ! value必须是[' + CodeUtil.REQUEST_ROLE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('来访角色：' + role, false, '  ');
+      }
       if (key.startsWith('@')) {
-        switch (key) {
-          case '@column':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('返回字段：例如 id,name,json_length(contactIdList):contactCount...', false, '  ');
-          case '@order':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('排序方式：+升序，-降序，例如 name+,date-,...', false, '  ');
-          case '@group':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('分组方式：例如 userId', false, '  ');
-          case '@having':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('SQL函数：例如 max(id)>100,sum(balance)<=10000,...', false, '  ');
-          case '@combine':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('条件组合：例如 name?,|tag?,&id{},!id,...', false, '  ');
-          case '@schema':
-            return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('数据库：例如 sys', false, '  ');
-          case '@correct':
-            return value != null ? ' ! value必须是Object类型！' : CodeUtil.getComment('字段校正', false, '  ');
-          case '@role':
-            try {
-              value = value.substring(1, value.length - 1).toUpperCase();
-            } catch (e) {}
-            var role = CodeUtil.REQUEST_ROLE[value];
-            return StringUtil.isEmpty(role) ? ' ! value必须是[' + CodeUtil.REQUEST_ROLE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('来访角色：' + role, false, '  ');
-        }
         return '';
       }
       var c = CodeUtil.getCommentFromDoc(tableList, objName, key, method);
@@ -930,15 +987,24 @@ var CodeUtil = {
           if (method == 'GET' || method == 'HEAD') {
             return '';
           }
-          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('请求密钥', false, '  ');
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('请求密钥：例如 User Comment[] Privacy-CIRCLE ...', false, '  ');
         case 'version':
           if (method == 'GET' || method == 'HEAD') {
             return '';
           }
-          return CodeUtil.getType4Request(value) != 'number' ? ' ! value必须是Number类型！' : CodeUtil.getComment('版本号', false, '  ');
+          return CodeUtil.getType4Request(value) != 'number' ? ' ! value必须是Number类型！' : CodeUtil.getComment('版本号: 例如 1 2 3 ...', false, '  ');
+        case 'format':
+          return CodeUtil.getType4Request(value) != 'boolean' ? ' ! value必须是Boolean类型！' : CodeUtil.getComment('格式化: true-是 false-否', false, '  ');
+        case '@schema':
+          return CodeUtil.getType4Request(value) != 'string' ? ' ! value必须是String类型！' : CodeUtil.getComment('集合空间：例如 sys apijson ...', false, '  ');
+        case '@database':
+          try {
+            value = value.substring(1, value.length - 1);
+          } catch (e) {}
+          return CodeUtil.REQUEST_DATABASE_KEYS.indexOf(value) < 0 ? ' ! value必须是[' + CodeUtil.REQUEST_DATABASE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('数据库：例如 MYSQL POSTGRESQL ORACLE ...', false, '  ');
         case '@role':
           try {
-            value = value.substring(1, value.length - 1).toUpperCase();
+            value = value.substring(1, value.length - 1);
           } catch (e) {}
           var role = CodeUtil.REQUEST_ROLE[value];
           return StringUtil.isEmpty(role) ? ' ! value必须是[' + CodeUtil.REQUEST_ROLE_KEYS.join() + ']中的一种！' : CodeUtil.getComment('默认角色：' + role, false, '  ');
@@ -1001,8 +1067,16 @@ var CodeUtil = {
         fun = '模糊搜索';
         key = columnName.substring(0, columnName.length - 1);
       }
-      else if (columnName.endsWith("?")) {//匹配正则表达式，查询时处理
+      else if (columnName.endsWith("~")) {//匹配正则表达式，查询时处理
         fun = '正则匹配';
+        key = columnName.substring(0, columnName.length - 1);
+        if (key.endsWith("*")) {
+          key = key.substring(0, key.length - 1);
+          fun += '(忽略大小写)';
+        }
+      }
+      else if (columnName.endsWith("%")) {//连续范围 BETWEEN AND，查询时处理
+        fun = '连续范围';
         key = columnName.substring(0, columnName.length - 1);
       }
       else if (columnName.endsWith("{}")) {//被包含，或者说key对应值处于value的范围内。查询时处理
@@ -1011,6 +1085,10 @@ var CodeUtil = {
       }
       else if (columnName.endsWith("<>")) {//包含，或者说value处于key对应值的范围内。查询时处理
         fun = '包含选项';
+        key = columnName.substring(0, columnName.length - 2);
+      }
+      else if (columnName.endsWith("}{")) {//存在，EXISTS。查询时处理
+        fun = '是否存在';
         key = columnName.substring(0, columnName.length - 2);
       }
       else if (columnName.endsWith("+")) {//延长，PUT查询时处理
